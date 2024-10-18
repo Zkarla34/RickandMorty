@@ -22,6 +22,8 @@ public class APIManager : MonoBehaviour
         public int id;
         public string name;
         public string status;
+        public string species;
+        public string image;
         public Location location;
     }
 
@@ -87,6 +89,8 @@ public class APIManager : MonoBehaviour
                     newCharacterItem.transform.Find("NameCharacter").GetComponent<TextMeshProUGUI>().text = character.name;
                     Debug.Log("personaje: " + character.name);
 
+                    Image characterImage = newCharacterItem.transform.Find("CharacterImage").GetComponent<Image>();
+                    StartCoroutine(LoadImage(character.image, characterImage));
                 }
             }
             else
@@ -97,6 +101,25 @@ public class APIManager : MonoBehaviour
 
         }
     }
+    
+    private IEnumerator LoadImage(string imageUrl, Image targetImage)
+    {
+        UnityWebRequest request = UnityWebRequestTexture.GetTexture(imageUrl);
+        yield return request.SendWebRequest();
+        if(request.result == UnityWebRequest.Result.ConnectionError
+            || request.result == UnityWebRequest.Result.ProtocolError)
+        {
+            Debug.LogError("Error al cargar la imagen: " + request.error);
+        }
+        else
+        {
+            Texture2D texture = ((DownloadHandlerTexture)request.downloadHandler).texture;
+            Sprite sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f,0.5f));
+            targetImage.sprite = sprite;
+        }
+    }
+    
+
 
     public void NextPage()
     {
