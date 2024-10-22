@@ -6,20 +6,29 @@ using Newtonsoft.Json;
 using UnityEngine.UI;
 using TMPro;
 using System.Threading.Tasks;
+using System;
 
 public class APIManager : MonoBehaviour
 {
     [Header("API Settings")]
     private string apiUrl = "https://rickandmortyapi.com/api/character";
     private int currentPage = 1;
-    [SerializeField] private int charactersPerPage;
+    private int totalPageCount;
 
     [Header("UI Elements")]
     public GameObject characterPanel;
-    public GameObject characterPrefab;
+    public Button characterPrefab;
     public TextMeshProUGUI pageNumberText;
-    public Slider pageSlider;
+    public TMP_Dropdown pageDropdown;
     public TextMeshProUGUI errorMesage;
+
+    [Header("UI Characters Details")]
+    public GameObject characterDetailPanel;
+    public Image characterDetailImage;
+    public TextMeshProUGUI characterDetailName;
+    public TextMeshProUGUI characterDetailStatus;
+    public TextMeshProUGUI characterDetailLocation;
+    public TextMeshProUGUI characterDetailFirstSeen;
 
     [Header("Dependencies")]
     public CharacterPool characterPool;
@@ -34,9 +43,9 @@ public class APIManager : MonoBehaviour
         public int id;
         public string name;
         public string status;
-        public string species;
         public string image;
         public Location location;
+        public List<string> episode;
     }
 
     [System.Serializable]
@@ -50,6 +59,12 @@ public class APIManager : MonoBehaviour
     {
         public Info info;
         public List<CharacterAPI> results;
+    }
+
+    [System.Serializable]
+    public class EpisodeAPI
+    {
+        public string name;
     }
 
     [System.Serializable]
@@ -69,6 +84,7 @@ public class APIManager : MonoBehaviour
             Debug.LogError("No se encontro");
             return;
         }
+        pageDropdown.onValueChanged.AddListener(OnDropdownPageChanged);
         await GetCharactersAsync(currentPage);
     }
 
@@ -95,9 +111,9 @@ public class APIManager : MonoBehaviour
 
                 if (list != null && list.results != null)
                 {
-                    UpdateUI(list.info.pages); 
+                    totalPageCount = list.info.pages;
+                    UpdateDropdown(totalPageCount); 
                     UpdateCharacterUI(list.results);
-                    
                 }
                 else
                 {
@@ -107,10 +123,71 @@ public class APIManager : MonoBehaviour
         }  
     }
 
-    private void UpdateUI(int totalPages)
+    private async Task<string> GetFirstEpisodeNameAsync(string episodeUrl)
     {
-        pageSlider.maxValue = totalPages;
-        pageNumberText.text = $"Page:{currentPage}";
+        try
+        {
+            using UnityWebRequest request = UnityWebRequest.Get(episodeUrl);
+            {
+                var operation = request.SendWebRequest();
+                while (!operation.isDone)
+                {
+                    await Task.Yield();
+                }
+
+                if (request.result == UnityWebRequest.Result.ConnectionError
+                       || request.result == UnityWebRequest.Result.ProtocolError)
+                {
+                    ShowError("Error al cargar los episodios: " + request.error);
+                    characterDetailFirstSeen.text = "First Seen In: Error al cargar el episodio";
+                    return "Error al cargar el episodio";
+                }
+                else
+                {
+                    string responseData = request.downloadHandler.text;
+                    EpisodeAPI episode = JsonConvert.DeserializeObject<EpisodeAPI>(responseData);
+                    if(episode != null)
+                    {
+                        characterDetailFirstSeen.text = "First Seen In: " + episode.name;
+                        return episode.name;
+                    }
+                    else
+                    {
+                        ShowError("Error: La respuesta no contiene datos validos");
+                        characterDetailFirstSeen.text = "First Seen In: Datos no disponibles";
+                        return "Datos no disponibles";
+                    }
+                }
+            }
+        }
+        catch(Exception e)
+        { 
+            ShowError($"Error al cargar la primera vez visto: {e.Message}");
+            characterDetailFirstSeen.text = "First Seen In: Error inesperado";
+            return "Datos no disponibles";
+        }
+    }
+    
+
+
+    private void UpdateDropdown(int totalPages)
+    {
+        pageDropdown.ClearOptions();
+        List<string> pageOptions = new List<string>();
+        for(int i = 1; i <= totalPages; i++)
+        {
+            pageOptions.Add(i.ToString());
+        }
+        pageDropdown.AddOptions(pageOptions);
+        pageDropdown.value = currentPage - 1;
+        pageDropdown.RefreshShownValue();
+    }
+
+    public async void OnDropdownPageChanged(int selectedPageIndex)
+    {
+        int selectedPage = selectedPageIndex + 1;
+        currentPage = selectedPage;
+        await GetCharactersAsync(selectedPage);
     }
 
     private void UpdateCharacterUI(List<CharacterAPI> characters)
@@ -121,16 +198,18 @@ public class APIManager : MonoBehaviour
         foreach (CharacterAPI character in characterInfo)
         {
             GameObject newCharacterItem = characterPool.GetCharacter();
-            newCharacterItem.transform.SetParent(characterPanel.transform, false);
-            newCharacterItem.transform.Find("NameCharacter").GetComponent<TextMeshProUGUI>().text = character.name;
-            Debug.Log("personaje: " + character.name);
-
-            //Image characterImage = newCharacterItem.transform.Find("CharacterImage").GetComponent<Image>();
-           // LoadImageAsync(character.image, characterImage);
+            if(newCharacterItem != null)
+            {
+                newCharacterItem.transform.SetParent(characterPanel.transform, false);
+                newCharacterItem.transform.Find("NameCharacter").GetComponent<TextMeshProUGUI>().text = character.name;
+                Debug.Log("personaje: " + character.name);
+                newCharacterItem.GetComponent<Button>().onClick.AddListener(() => ShowCharacterDetails(character));
+            }
+            
         }
     }
 
-    /*
+    
     private async void LoadImageAsync(string imageUrl, Image targetImage)
     {
         if(imageCache.TryGetValue(imageUrl, out Sprite cachedSprite))
@@ -147,7 +226,7 @@ public class APIManager : MonoBehaviour
                     await Task.Yield();
                 }
                 if (request.result == UnityWebRequest.Result.ConnectionError
-                || request.result == UnityWebRequest.Result.ProtocolError)
+                    || request.result == UnityWebRequest.Result.ProtocolError)
                 {
                     ShowError("Error al cargar la imagen: " + request.error);
                 }
@@ -161,7 +240,36 @@ public class APIManager : MonoBehaviour
             }
         }
     }
-    */
+    
+
+    public async void ShowCharacterDetails(CharacterAPI character)
+    {
+        characterPanel.SetActive(false);
+        
+        characterDetailPanel.SetActive(true);
+        characterDetailName.text = character.name;
+        characterDetailStatus.text = $"Status: {character.status}";
+        characterDetailLocation.text = $"Location: {character.location.name}";
+
+        if(character.episode != null && character.episode.Count > 0)
+        {
+            string firstEpisodeUrl = character.episode[0];
+            string firstEpisodeName = await GetFirstEpisodeNameAsync(firstEpisodeUrl);
+            characterDetailFirstSeen.text = $"First Seen In: { firstEpisodeName}";
+        }
+        else
+        {
+            characterDetailFirstSeen.text = "First Seen In: Unknown";
+        }
+
+        LoadImageAsync(character.image, characterDetailImage);
+    }
+
+    public void CloseCharacterDetails()
+    {
+        characterDetailPanel.SetActive(false);
+        characterPanel.SetActive(true);
+    }
     private void ShowError(string message)
     {
         Debug.LogError(message);
@@ -169,19 +277,12 @@ public class APIManager : MonoBehaviour
         errorMesage.gameObject.SetActive(true);
     }
 
-    public async void OnSliderValueChanged()
-    {
-        int pageNumber = Mathf.RoundToInt(pageSlider.value);
-        pageNumberText.text = $"Page: {pageNumber}";
-        currentPage = pageNumber;
-        await GetCharactersAsync(currentPage);
-    }
     public async void NextPage()
     {
-        if(currentPage < pageSlider.maxValue)
+        if(currentPage < totalPageCount)
         {
             currentPage++;
-            pageSlider.value = currentPage;
+            pageDropdown.value = currentPage;
             await GetCharactersAsync(currentPage);
         }
     }
@@ -191,7 +292,7 @@ public class APIManager : MonoBehaviour
         if (currentPage > 1)
         {
             currentPage--;
-            pageSlider.value = currentPage;
+            pageDropdown.value = currentPage;
             await GetCharactersAsync(currentPage);
         }
     }
