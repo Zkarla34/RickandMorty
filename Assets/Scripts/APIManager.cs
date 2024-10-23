@@ -5,8 +5,6 @@ using System.Collections.Generic;
 using Newtonsoft.Json;
 using UnityEngine.UI;
 using TMPro;
-using System.Threading.Tasks;
-using System;
 
 public class APIManager : MonoBehaviour
 {
@@ -17,22 +15,28 @@ public class APIManager : MonoBehaviour
 
     [Header("UI Elements")]
     public GameObject characterPanel;
-    public Button characterPrefab;
-    public TextMeshProUGUI pageNumberText;
     public TMP_Dropdown pageDropdown;
-    public TextMeshProUGUI errorMesage;
+    public Button buttonNext;
+    public Button buttonPrevious;
 
     [Header("UI Characters Details")]
-    public GameObject characterDetailPanel;
+    public GameObject characterDetailPanel, loadingImage;
     public Image characterDetailImage;
     public TextMeshProUGUI characterDetailName;
     public TextMeshProUGUI characterDetailStatus;
     public TextMeshProUGUI characterDetailLocation;
     public TextMeshProUGUI characterDetailFirstSeen;
 
+    [Header("Error UI Elements")]
+    public GameObject errorPanel; 
+    public TextMeshProUGUI errorPanelMessage; 
+    public Button closeErrorButton;
+
     [Header("Dependencies")]
     public CharacterPool characterPool;
+    private Dictionary<int, List<CharacterAPI>> cachedCharacters = new Dictionary<int, List<CharacterAPI>>();
     private Dictionary<string, Sprite> imageCache = new Dictionary<string, Sprite>();
+    private Dictionary<string, string> episodeCache = new Dictionary<string, string>();
     public List<CharacterAPI> characterInfo = new List<CharacterAPI>();
 
 
@@ -60,51 +64,56 @@ public class APIManager : MonoBehaviour
         public Info info;
         public List<CharacterAPI> results;
     }
-
+    
     [System.Serializable]
     public class EpisodeAPI
     {
         public string name;
     }
-
+    
     [System.Serializable]
     public class Info
     {
-        public int count;
         public int pages;
-        public string next;
-        public string prev;
     }
 
-    private async void Start()
+    private void Start()
     {
+        
         characterPool = GameObject.Find("CharacterPoolManager").GetComponent<CharacterPool>();
         if(characterPool == null)
         {
-            Debug.LogError("No se encontro");
+            Debug.LogError("No se encontro pool");
             return;
         }
+        buttonNext.onClick.AddListener(NextPage);
+        buttonPrevious.onClick.AddListener(PreviousPage);
         pageDropdown.onValueChanged.AddListener(OnDropdownPageChanged);
-        await GetCharactersAsync(currentPage);
+        closeErrorButton.onClick.AddListener(CloseErrorPanel);
+        StartCoroutine(GetCharactersCoroutine(currentPage));
     }
 
-    private async Task GetCharactersAsync(int page)
+    private IEnumerator GetCharactersCoroutine(int page)
     {
-        string url = $"{apiUrl}?page={page}";
-        using UnityWebRequest request = UnityWebRequest.Get(url);
+        if (cachedCharacters.ContainsKey(page))
         {
-            var operation = request.SendWebRequest();
-            while(!operation.isDone)
+            UpdateCharacterUI(cachedCharacters[page]);
+            yield break;
+        }
+
+        string url = $"{apiUrl}?page={page}";
+
+        using (UnityWebRequest request = UnityWebRequest.Get(url))
+        {
+            yield return request.SendWebRequest();
+            
+            if (request.result != UnityWebRequest.Result.Success )
             {
-                await Task.Yield();
+                ShowError("Error en la solicitud: " + request.error);
+                yield break;
             }
 
-            if (request.result == UnityWebRequest.Result.ConnectionError
-                || request.result == UnityWebRequest.Result.ProtocolError)
-            {
-               ShowError("Error de la solicitud: " + request.error);
-            }
-            else
+            try
             {
                 string responseData = request.downloadHandler.text;
                 CharacterList list = JsonConvert.DeserializeObject<CharacterList>(responseData);
@@ -112,63 +121,89 @@ public class APIManager : MonoBehaviour
                 if (list != null && list.results != null)
                 {
                     totalPageCount = list.info.pages;
-                    UpdateDropdown(totalPageCount); 
+                    UpdateDropdown(totalPageCount);
+                    cachedCharacters[page] = list.results;
                     UpdateCharacterUI(list.results);
+                    UpdateButtonState();
                 }
                 else
                 {
-                    ShowError("La respuesta no contiene datos o esta vacia");
+                    ShowError("Datos no validos recibidos de la API");
                 }
             }
-        }  
-    }
-
-    private async Task<string> GetFirstEpisodeNameAsync(string episodeUrl)
-    {
-        try
-        {
-            using UnityWebRequest request = UnityWebRequest.Get(episodeUrl);
+            catch(System.Exception e)
             {
-                var operation = request.SendWebRequest();
-                while (!operation.isDone)
-                {
-                    await Task.Yield();
-                }
-
-                if (request.result == UnityWebRequest.Result.ConnectionError
-                       || request.result == UnityWebRequest.Result.ProtocolError)
-                {
-                    ShowError("Error al cargar los episodios: " + request.error);
-                    characterDetailFirstSeen.text = "First Seen In: Error al cargar el episodio";
-                    return "Error al cargar el episodio";
-                }
-                else
-                {
-                    string responseData = request.downloadHandler.text;
-                    EpisodeAPI episode = JsonConvert.DeserializeObject<EpisodeAPI>(responseData);
-                    if(episode != null)
-                    {
-                        characterDetailFirstSeen.text = "First Seen In: " + episode.name;
-                        return episode.name;
-                    }
-                    else
-                    {
-                        ShowError("Error: La respuesta no contiene datos validos");
-                        characterDetailFirstSeen.text = "First Seen In: Datos no disponibles";
-                        return "Datos no disponibles";
-                    }
-                }
+                ShowError("Error al procesar los datos " + e.Message);
             }
         }
-        catch(Exception e)
-        { 
-            ShowError($"Error al cargar la primera vez visto: {e.Message}");
-            characterDetailFirstSeen.text = "First Seen In: Error inesperado";
-            return "Datos no disponibles";
+    }
+    private void ChangePage(int newPage)
+    {
+        if(currentPage != newPage)
+        {
+            currentPage = newPage;
+            if(cachedCharacters.ContainsKey(currentPage))
+            {
+                UpdateCharacterUI(cachedCharacters[currentPage]);
+            }
+            else
+            {
+                StartCoroutine(GetCharactersCoroutine(currentPage));
+            }
+            UpdateButtonState();
+            UpdateDropdownSelection();
         }
     }
-    
 
+     public void ShowCharacterDetails(CharacterAPI character)
+    {
+        characterPanel.SetActive(false);
+        characterDetailPanel.SetActive(true);
+
+        characterDetailName.text = character.name;
+        characterDetailStatus.text = $"Status: {character.status}";
+        characterDetailLocation.text = $"Location: {character.location.name}";
+
+        loadingImage.SetActive(true);
+
+        characterDetailImage.sprite = Resources.Load<Sprite>("UI/Charging");
+        characterDetailImage.gameObject.SetActive(true);
+
+        if (!imageCache.ContainsKey(character.image))
+        {
+            StartCoroutine(LoadImageCoroutine(character.image));
+        }
+        else
+        {
+            characterDetailImage.sprite = imageCache[character.image];
+            characterDetailImage.gameObject.SetActive(true);
+            loadingImage.SetActive(false);
+        }
+        characterDetailFirstSeen.text = "Cargando...";
+
+        if (character.episode != null && character.episode.Count > 0)
+        {
+            string firstEpisodeUrl = character.episode[0];
+            if(episodeCache.ContainsKey(firstEpisodeUrl))
+            {
+                characterDetailFirstSeen.text = $"First Seen In: {episodeCache[firstEpisodeUrl]}";
+            }
+            else
+            {
+                StartCoroutine(GetFirstEpisodeNameCoroutine(firstEpisodeUrl));
+            }
+        }
+    }
+
+
+    public void OnDropdownPageChanged(int selectedPageIndex)
+    {
+        int selectedPage = selectedPageIndex + 1;
+        if(selectedPage != currentPage)
+        {
+            ChangePage(selectedPage);
+        }
+    }
 
     private void UpdateDropdown(int totalPages)
     {
@@ -182,89 +217,99 @@ public class APIManager : MonoBehaviour
         pageDropdown.value = currentPage - 1;
         pageDropdown.RefreshShownValue();
     }
-
-    public async void OnDropdownPageChanged(int selectedPageIndex)
+    private void UpdateDropdownSelection()
     {
-        int selectedPage = selectedPageIndex + 1;
-        currentPage = selectedPage;
-        await GetCharactersAsync(selectedPage);
+        pageDropdown.value = currentPage - 1;
+        pageDropdown.RefreshShownValue();
     }
 
     private void UpdateCharacterUI(List<CharacterAPI> characters)
     {
-        characterInfo.Clear();
-        characterInfo.AddRange(characters);
+        foreach (Transform child in characterPanel.transform)
+        {
+            child.gameObject.SetActive(false);
+        }
 
-        foreach (CharacterAPI character in characterInfo)
+        for(int i=0; i< characters.Count; i++)
         {
             GameObject newCharacterItem = characterPool.GetCharacter();
             if(newCharacterItem != null)
             {
                 newCharacterItem.transform.SetParent(characterPanel.transform, false);
-                newCharacterItem.transform.Find("NameCharacter").GetComponent<TextMeshProUGUI>().text = character.name;
-                Debug.Log("personaje: " + character.name);
-                newCharacterItem.GetComponent<Button>().onClick.AddListener(() => ShowCharacterDetails(character));
+                newCharacterItem.transform.Find("NameCharacter").GetComponent<TextMeshProUGUI>().text = characters[i].name;
+
+                Button button = newCharacterItem.GetComponent<Button>();
+                button.onClick.RemoveAllListeners();
+                int index = i;
+                button.onClick.AddListener(() => ShowCharacterDetails(characters[index]));
+                newCharacterItem.SetActive(true);
             }
-            
         }
     }
-
     
-    private async void LoadImageAsync(string imageUrl, Image targetImage)
+    private IEnumerator LoadImageCoroutine(string imageUrl)
     {
-        if(imageCache.TryGetValue(imageUrl, out Sprite cachedSprite))
+        using (UnityWebRequest request = UnityWebRequestTexture.GetTexture(imageUrl))
         {
-            targetImage.sprite = cachedSprite;
-        }
-        else
-        {
-            using UnityWebRequest request = UnityWebRequestTexture.GetTexture(imageUrl);
+            yield return request.SendWebRequest();
+            if(request.result == UnityWebRequest.Result.Success)
             {
-                var operation = request.SendWebRequest();
-                while(!operation.isDone)
+                Texture2D texture = DownloadHandlerTexture.GetContent(request);
+                Sprite sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
+                imageCache[imageUrl] = sprite;
+                characterDetailImage.sprite = sprite;
+                characterDetailImage.gameObject.SetActive(true);
+                loadingImage.SetActive(false);
+            }
+            else
+            {
+                ShowError("Error al cargar la imagen " + request.error);
+                loadingImage.SetActive(false);
+            }
+        }
+    }
+
+    
+    private IEnumerator GetFirstEpisodeNameCoroutine(string episodeUrl)
+    {
+         using (UnityWebRequest request = UnityWebRequest.Get(episodeUrl))
+         {
+            yield return request.SendWebRequest();
+            
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                ShowError("Error al cargar el episodio: " + request.error);
+                characterDetailFirstSeen.text = "First Seen In: Unknown";
+            }
+            else
+            {
+                try
                 {
-                    await Task.Yield();
+                    string responseData = request.downloadHandler.text;
+                    EpisodeAPI episodeAPI = JsonConvert.DeserializeObject<EpisodeAPI>(responseData);
+                    if (episodeAPI != null)
+                    {
+                        string episodeName = episodeAPI.name;
+                        if(!episodeCache.ContainsKey(episodeUrl))
+                        {
+                            episodeCache[episodeUrl] = episodeName;
+                        }
+                        characterDetailFirstSeen.text = $"First Seen In: {episodeName}";
+                    }
+                    else
+                    {
+                        characterDetailFirstSeen.text = "First Seen In: Unknown";
+                    }
                 }
-                if (request.result == UnityWebRequest.Result.ConnectionError
-                    || request.result == UnityWebRequest.Result.ProtocolError)
+                catch(System.Exception e)
                 {
-                    ShowError("Error al cargar la imagen: " + request.error);
-                }
-                else
-                {
-                    Texture2D texture = ((DownloadHandlerTexture)request.downloadHandler).texture;
-                    Sprite sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
-                    targetImage.sprite = sprite;
-                    imageCache[imageUrl] = sprite;
+                    ShowError("Error al cargar la primera vista " + e.Message);
+                    characterDetailFirstSeen.text = "First Seen In: Unknown";
                 }
             }
         }
     }
-    
-
-    public async void ShowCharacterDetails(CharacterAPI character)
-    {
-        characterPanel.SetActive(false);
-        
-        characterDetailPanel.SetActive(true);
-        characterDetailName.text = character.name;
-        characterDetailStatus.text = $"Status: {character.status}";
-        characterDetailLocation.text = $"Location: {character.location.name}";
-
-        if(character.episode != null && character.episode.Count > 0)
-        {
-            string firstEpisodeUrl = character.episode[0];
-            string firstEpisodeName = await GetFirstEpisodeNameAsync(firstEpisodeUrl);
-            characterDetailFirstSeen.text = $"First Seen In: { firstEpisodeName}";
-        }
-        else
-        {
-            characterDetailFirstSeen.text = "First Seen In: Unknown";
-        }
-
-        LoadImageAsync(character.image, characterDetailImage);
-    }
-
+  
     public void CloseCharacterDetails()
     {
         characterDetailPanel.SetActive(false);
@@ -273,27 +318,36 @@ public class APIManager : MonoBehaviour
     private void ShowError(string message)
     {
         Debug.LogError(message);
-        errorMesage.text = message;
-        errorMesage.gameObject.SetActive(true);
+        errorPanelMessage.text = message;
+        errorPanel.SetActive(true);
+    }
+    
+    private void CloseErrorPanel()
+    {
+        errorPanel.SetActive(false);
     }
 
-    public async void NextPage()
+    private void UpdateButtonState()
+    {
+        buttonNext.interactable = currentPage < totalPageCount;
+        buttonPrevious.interactable = currentPage > 1;
+    }
+
+    public void NextPage()
     {
         if(currentPage < totalPageCount)
         {
-            currentPage++;
-            pageDropdown.value = currentPage;
-            await GetCharactersAsync(currentPage);
+            ChangePage(currentPage + 1);
+            UpdateDropdownSelection();
         }
     }
 
-    public async void PreviousPage()
+    public void PreviousPage()
     {
         if (currentPage > 1)
         {
-            currentPage--;
-            pageDropdown.value = currentPage;
-            await GetCharactersAsync(currentPage);
+            ChangePage(currentPage - 1);
+            UpdateDropdownSelection();
         }
     }
 }

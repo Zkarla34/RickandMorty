@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.TextCore.Text;
 
 public class CharacterPool : MonoBehaviour
 {
@@ -8,7 +9,8 @@ public class CharacterPool : MonoBehaviour
 
     public GameObject characterPrefab;
     public int poolSize;
-    private Queue<GameObject> pool = new Queue<GameObject>();
+    public Transform parentTransform;
+    private List<GameObject> pool;
 
     private void Awake()
     {
@@ -28,41 +30,38 @@ public class CharacterPool : MonoBehaviour
 
     private void InitializePool()
     {
+        pool = new List<GameObject>();
         for (int i = 0; i < poolSize; i++)
         {
-            GameObject character = Instantiate(characterPrefab);
+            GameObject character = Instantiate(characterPrefab, parentTransform);
+            RectTransform rect = character.GetComponent<RectTransform>();
+            if(rect != null)
+            {
+                rect.anchoredPosition = Vector2.zero;
+            }
             character.SetActive(false);
-            pool.Enqueue(character);
+            pool.Add(character);
         }
     }
    public GameObject GetCharacter()
    {
-        if(pool.Count > 0)
+        foreach(var obj in pool)
         {
-            GameObject character = pool.Dequeue();
-            if(character != null)
+            if(!obj.activeInHierarchy)
             {
-                character.SetActive(true);
-                return character;
-            }
-            else
-            {
-                Debug.LogWarning("El objeto de personaje ha sido destruido, intentando obtener otro.");
-                return GetCharacter();
+                obj.SetActive(true);
+                return obj;
             }
         }
-        else
-        {
-            Debug.LogWarning("No hay personajes disponibles en el pool.");
-            return null;
-        }
-        
-   }
 
-    public void ResetCharacter(GameObject character)
-    {
-        character.SetActive(false);
-        character.transform.SetParent(transform);
-        pool.Enqueue(character);
-    }
-}
+        GameObject character = Instantiate(characterPrefab, parentTransform);
+        RectTransform rect = character.GetComponent<RectTransform>();
+        if(rect != null)
+        {
+            rect.anchoredPosition = Vector2.zero;
+        }
+        character.SetActive(true);
+        pool.Add(character);
+        return character;
+   }
+ }  
