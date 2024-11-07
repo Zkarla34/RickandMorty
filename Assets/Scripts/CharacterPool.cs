@@ -1,7 +1,9 @@
 using System.Collections;
 using System.Collections.Generic;
+using UnityEditor;
 using UnityEngine;
 using UnityEngine.TextCore.Text;
+
 
 public class CharacterPool : MonoBehaviour
 {
@@ -34,6 +36,7 @@ public class CharacterPool : MonoBehaviour
         for (int i = 0; i < poolSize; i++)
         {
             GameObject character = Instantiate(characterPrefab, parentTransform);
+
             RectTransform rect = character.GetComponent<RectTransform>();
             if(rect != null)
             {

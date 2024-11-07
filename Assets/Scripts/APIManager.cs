@@ -8,6 +8,9 @@ using TMPro;
 
 public class APIManager : MonoBehaviour
 {
+
+    public UIAnimationController animationController;
+
     [Header("API Settings")]
     private string apiUrl = "https://rickandmortyapi.com/api/character";
     private int currentPage = 1;
@@ -28,8 +31,8 @@ public class APIManager : MonoBehaviour
     public TextMeshProUGUI characterDetailFirstSeen;
 
     [Header("Error UI Elements")]
-    public GameObject errorPanel; 
-    public TextMeshProUGUI errorPanelMessage; 
+    public GameObject errorPanel;
+    public TextMeshProUGUI errorPanelMessage;
     public Button closeErrorButton;
 
     [Header("Dependencies")]
@@ -37,7 +40,7 @@ public class APIManager : MonoBehaviour
     private Dictionary<int, List<CharacterAPI>> cachedCharacters = new Dictionary<int, List<CharacterAPI>>();
     private Dictionary<string, Sprite> imageCache = new Dictionary<string, Sprite>();
     private Dictionary<string, string> episodeCache = new Dictionary<string, string>();
-    public List<CharacterAPI> characterInfo = new List<CharacterAPI>();
+    // public List<CharacterAPI> characterInfo = new List<CharacterAPI>();
 
 
     //Data Structures
@@ -64,13 +67,13 @@ public class APIManager : MonoBehaviour
         public Info info;
         public List<CharacterAPI> results;
     }
-    
+
     [System.Serializable]
     public class EpisodeAPI
     {
         public string name;
     }
-    
+
     [System.Serializable]
     public class Info
     {
@@ -79,9 +82,8 @@ public class APIManager : MonoBehaviour
 
     private void Start()
     {
-        
-        characterPool = GameObject.Find("CharacterPoolManager").GetComponent<CharacterPool>();
-        if(characterPool == null)
+        characterPool = FindObjectOfType<CharacterPool>();
+        if (characterPool == null)
         {
             Debug.LogError("No se encontro pool");
             return;
@@ -100,14 +102,13 @@ public class APIManager : MonoBehaviour
             UpdateCharacterUI(cachedCharacters[page]);
             yield break;
         }
-
         string url = $"{apiUrl}?page={page}";
-
         using (UnityWebRequest request = UnityWebRequest.Get(url))
         {
             yield return request.SendWebRequest();
-            
-            if (request.result != UnityWebRequest.Result.Success )
+
+            if (request.result == UnityWebRequest.Result.ConnectionError ||
+                request.result == UnityWebRequest.Result.ProtocolError)
             {
                 ShowError("Error en la solicitud: " + request.error);
                 yield break;
@@ -115,34 +116,33 @@ public class APIManager : MonoBehaviour
 
             try
             {
-                string responseData = request.downloadHandler.text;
-                CharacterList list = JsonConvert.DeserializeObject<CharacterList>(responseData);
-
+                string respondeData = request.downloadHandler.text;
+                CharacterList list = JsonUtility.FromJson<CharacterList>(respondeData);
                 if (list != null && list.results != null)
                 {
                     totalPageCount = list.info.pages;
-                    UpdateDropdown(totalPageCount);
                     cachedCharacters[page] = list.results;
+                    UpdateDropdown(totalPageCount);
                     UpdateCharacterUI(list.results);
-                    UpdateButtonState();
                 }
                 else
                 {
-                    ShowError("Datos no validos recibidos de la API");
+                    ShowError("Datos invalidos recibidos de la API");
                 }
             }
-            catch(System.Exception e)
+            catch (System.Exception e)
             {
-                ShowError("Error al procesar los datos " + e.Message);
+                ShowError("Error al procesar los datos: " + e.Message);
             }
         }
     }
+
     private void ChangePage(int newPage)
     {
-        if(currentPage != newPage)
+        if (currentPage != newPage)
         {
             currentPage = newPage;
-            if(cachedCharacters.ContainsKey(currentPage))
+            if (cachedCharacters.ContainsKey(currentPage))
             {
                 UpdateCharacterUI(cachedCharacters[currentPage]);
             }
@@ -155,7 +155,7 @@ public class APIManager : MonoBehaviour
         }
     }
 
-     public void ShowCharacterDetails(CharacterAPI character)
+    public void ShowCharacterDetails(CharacterAPI character)
     {
         characterPanel.SetActive(false);
         characterDetailPanel.SetActive(true);
@@ -184,7 +184,7 @@ public class APIManager : MonoBehaviour
         if (character.episode != null && character.episode.Count > 0)
         {
             string firstEpisodeUrl = character.episode[0];
-            if(episodeCache.ContainsKey(firstEpisodeUrl))
+            if (episodeCache.ContainsKey(firstEpisodeUrl))
             {
                 characterDetailFirstSeen.text = $"First Seen In: {episodeCache[firstEpisodeUrl]}";
             }
@@ -199,7 +199,7 @@ public class APIManager : MonoBehaviour
     public void OnDropdownPageChanged(int selectedPageIndex)
     {
         int selectedPage = selectedPageIndex + 1;
-        if(selectedPage != currentPage)
+        if (selectedPage != currentPage)
         {
             ChangePage(selectedPage);
         }
@@ -209,7 +209,7 @@ public class APIManager : MonoBehaviour
     {
         pageDropdown.ClearOptions();
         List<string> pageOptions = new List<string>();
-        for(int i = 1; i <= totalPages; i++)
+        for (int i = 1; i <= totalPages; i++)
         {
             pageOptions.Add(i.ToString());
         }
@@ -230,10 +230,11 @@ public class APIManager : MonoBehaviour
             child.gameObject.SetActive(false);
         }
 
-        for(int i=0; i< characters.Count; i++)
+        List<RectTransform> charactersTransforms = new List<RectTransform>();
+        for (int i = 0; i < characters.Count; i++)
         {
             GameObject newCharacterItem = characterPool.GetCharacter();
-            if(newCharacterItem != null)
+            if (newCharacterItem != null)
             {
                 newCharacterItem.transform.SetParent(characterPanel.transform, false);
                 newCharacterItem.transform.Find("NameCharacter").GetComponent<TextMeshProUGUI>().text = characters[i].name;
@@ -242,17 +243,19 @@ public class APIManager : MonoBehaviour
                 button.onClick.RemoveAllListeners();
                 int index = i;
                 button.onClick.AddListener(() => ShowCharacterDetails(characters[index]));
-                newCharacterItem.SetActive(true);
+                RectTransform rectTransform = newCharacterItem.GetComponent<RectTransform>();
+                charactersTransforms.Add(rectTransform);
             }
         }
+        StartCoroutine(DisplayCharacterWithAnimation(charactersTransforms));
     }
-    
+
     private IEnumerator LoadImageCoroutine(string imageUrl)
     {
         using (UnityWebRequest request = UnityWebRequestTexture.GetTexture(imageUrl))
         {
             yield return request.SendWebRequest();
-            if(request.result == UnityWebRequest.Result.Success)
+            if (request.result == UnityWebRequest.Result.Success)
             {
                 Texture2D texture = DownloadHandlerTexture.GetContent(request);
                 Sprite sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
@@ -269,14 +272,15 @@ public class APIManager : MonoBehaviour
         }
     }
 
-    
+
     private IEnumerator GetFirstEpisodeNameCoroutine(string episodeUrl)
     {
-         using (UnityWebRequest request = UnityWebRequest.Get(episodeUrl))
-         {
+        using (UnityWebRequest request = UnityWebRequest.Get(episodeUrl))
+        {
             yield return request.SendWebRequest();
-            
-            if (request.result != UnityWebRequest.Result.Success)
+
+            if (request.result == UnityWebRequest.Result.ConnectionError ||
+                request.result == UnityWebRequest.Result.ProtocolError)
             {
                 ShowError("Error al cargar el episodio: " + request.error);
                 characterDetailFirstSeen.text = "First Seen In: Unknown";
@@ -286,11 +290,11 @@ public class APIManager : MonoBehaviour
                 try
                 {
                     string responseData = request.downloadHandler.text;
-                    EpisodeAPI episodeAPI = JsonConvert.DeserializeObject<EpisodeAPI>(responseData);
+                    EpisodeAPI episodeAPI = JsonUtility.FromJson<EpisodeAPI>(responseData);
                     if (episodeAPI != null)
                     {
                         string episodeName = episodeAPI.name;
-                        if(!episodeCache.ContainsKey(episodeUrl))
+                        if (!episodeCache.ContainsKey(episodeUrl))
                         {
                             episodeCache[episodeUrl] = episodeName;
                         }
@@ -301,7 +305,7 @@ public class APIManager : MonoBehaviour
                         characterDetailFirstSeen.text = "First Seen In: Unknown";
                     }
                 }
-                catch(System.Exception e)
+                catch (System.Exception e)
                 {
                     ShowError("Error al cargar la primera vista " + e.Message);
                     characterDetailFirstSeen.text = "First Seen In: Unknown";
@@ -309,7 +313,7 @@ public class APIManager : MonoBehaviour
             }
         }
     }
-  
+
     public void CloseCharacterDetails()
     {
         characterDetailPanel.SetActive(false);
@@ -321,7 +325,7 @@ public class APIManager : MonoBehaviour
         errorPanelMessage.text = message;
         errorPanel.SetActive(true);
     }
-    
+
     private void CloseErrorPanel()
     {
         errorPanel.SetActive(false);
@@ -335,7 +339,7 @@ public class APIManager : MonoBehaviour
 
     public void NextPage()
     {
-        if(currentPage < totalPageCount)
+        if (currentPage < totalPageCount)
         {
             ChangePage(currentPage + 1);
             UpdateDropdownSelection();
@@ -349,5 +353,11 @@ public class APIManager : MonoBehaviour
             ChangePage(currentPage - 1);
             UpdateDropdownSelection();
         }
+    }
+
+    private IEnumerator DisplayCharacterWithAnimation(List<RectTransform> characterRectransform)
+    {
+        yield return animationController.ShowPanelCharacters(characterPanel.GetComponent<RectTransform>());
+        //yield return animationController.ShowCharactersSequentially(characterRectransform);
     }
 }
